@@ -1,2 +1,3 @@
 jax_env/
 /data/TinyStories
+__pycache__/
