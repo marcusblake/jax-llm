@@ -3,6 +3,7 @@ import numpy as np
 import os
 import grain
 import jax
+from typing import Tuple
 
 _TINY_STORIES_SPECIAL_CHARACTER = '<|endoftext|>'
 _TINY_STORIES_TRAIN_DATA = 'data/TinyStories/TinyStories-train.txt'
@@ -25,6 +26,11 @@ class TruncateOrPad(grain.transforms.Map):
         padding_length = max(0, _MAX_SEQUENCE_LENGTH - n_tokens)
         output_sequence = np.pad(input_sequence, (0, padding_length))
         return output_sequence[:_MAX_SEQUENCE_LENGTH]
+    
+class ShiftAndCreateLabel(grain.transforms.Map):
+    def map(self, input_sequence: np.array) -> np.array:
+        return {""}
+
 
 
 def _read_tinystories_from_file(data_split):
@@ -55,13 +61,16 @@ class TinyStoriesDataSource(grain.sources.RandomAccessDataSource):
 
 
 def get_tiny_stories_data_loader(data_split: str,
-                                 num_epochs: int) -> grain.DataLoader:
+                                 num_epochs: int,
+                                 batch_size: int,
+                                 seed: int | None = None) -> grain.DataLoader:
     data_source = TinyStoriesDataSource(data_split)
     sampler = grain.samplers.IndexSampler(num_records=len(data_source),
                                           shuffle=True,
                                           num_epochs=num_epochs,
-                                          seed=10)
+                                          seed=seed)
     return grain.DataLoader(data_source=data_source,
                             sampler=sampler,
-                            operations=[Tokenize(),
+                            operations=[grain.Batch(),
+                                        Tokenize(),
                                         TruncateOrPad()])

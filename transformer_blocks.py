@@ -1,8 +1,9 @@
-from flax import nnx
+from flax import nnx, struct
 import jax
 import jax.numpy as jnp
 from typing import Dict
 import chex
+import dataclasses
 
 # Needed to make logits very small so that they don't contribute to probabilities
 # when computing softmax.
@@ -16,12 +17,39 @@ def causal_attn_mask(seq_length: int) -> jax.Array:
 
 
 class PositionalEmbeddings(nnx.Module):
+    """
+    """
 
-    def __init__(self):
-        pass
+    def __init__(self, max_seq_length: int, hidden_dim: int):
+        self.positional_embeds = nnx.Embed(max_seq_length, hidden_dim)
 
-    def __call__(self):
-        pass
+    def __call__(self, x: jax.Array, seq_length: int) -> jax.Array:
+        seq_length = x.shape[0]
+        return x + self.positional_embeds(jnp.arange(0, seq_length))
+
+
+class SinusoidalPositionalEmbeddings(nnx.Module):
+
+    def __init__(self, max_seq_length: int, hidden_dim: int):
+        self.max_seq_length = max_seq_length
+        self.hidden_dim = hidden_dim
+        if hidden_dim % 2 != 0:
+            raise ValueError("hidden_dim must be even")
+
+        self.positional_embeds = jnp.zeros(shape=(max_seq_length, hidden_dim))
+        positions = jnp.expand_dims(jnp.arange(0, max_seq_length), axis=1)
+        dim_values = jnp.log(10000) * jnp.arange(0, hidden_dim, 2) / hidden_dim
+        values = positions / jnp.exp(dim_values)
+        # pos / 10000 ^ ((2 * i)/d_model)
+        self.positional_embeds = self.positional_embeds.at[:, ::2].set(
+            jnp.sin(values))
+        self.positional_embeds = self.positional_embeds.at[:, 1::2].set(
+            jnp.cos(values))
+
+    def __call__(self, x: jax.Array) -> jax.Array:
+        """Forward pass on sequence x [B, T, D]
+        """
+        return x + self.positional_embeds
 
 
 class WordEmbeddings(nnx.Module):
@@ -29,8 +57,14 @@ class WordEmbeddings(nnx.Module):
     def __init__(self, vocab_size: int, hidden_dim: int):
         self.word_embeds = nnx.Embed(vocab_size, hidden_dim)
 
-    def __call__(self, token_id: jax.Array):
-        return self.word_embeds(token_id)
+    def __call__(self, token_ids: jax.Array):
+        return self.word_embeds(token_ids)
+
+
+@struct.dataclass
+class AttentionOutput:
+    activations: jax.Array
+    attn_scores: jax.Array | None
 
 
 class Attention(nnx.Module):
@@ -54,7 +88,7 @@ class Attention(nnx.Module):
                  query: jax.Array,
                  key: jax.Array,
                  value: jax.Array,
-                 attn_mask: jax.Array | None = None) -> Dict[str, jax.Array]:
+                 attn_mask: jax.Array | None = None) -> AttentionOutput:
         """Forward pass for calculating self attention.
 
         Args:
@@ -69,9 +103,10 @@ class Attention(nnx.Module):
             Attention scores, 
         """
         h_q = self.W_q(query)
-        h_k = jnp.transpose(self.W_k(key), axes=[0, 2, 1])
-        # Get dimension of the keys.
+        h_k = self.W_k(key)
         d_k = h_k.shape[-1]
+        h_k = jnp.transpose(h_k, axes=[0, 2, 1])
+        # Get dimension of the keys.
         logits = jnp.matmul(h_q, h_k) / jnp.sqrt(d_k)
         if attn_mask is not None:
             logits = jax.vmap(
@@ -82,12 +117,15 @@ class Attention(nnx.Module):
         h_v = self.W_v(value)
 
         output = jnp.matmul(scores, h_v)
-        return {'output': output, 'attn_scores': scores}
-    
+        return AttentionOutput(activations=output, attn_scores=scores)
+
+
 class LayerNorm(nnx.Module):
-    def __init__(self, hidden_dim: int):
+
+    def __init__(self, hidden_dim: int, eps: int = 1e-9):
         self.gain_param = nnx.Param(jnp.ones(hidden_dim))
         self.bias_param = nnx.Param(jnp.zeros(hidden_dim))
+        self.eps = eps
 
     def __call__(self, input_tokens: jax.Array) -> jax.Array:
         """Normalizes the activations across the batch.
@@ -96,9 +134,11 @@ class LayerNorm(nnx.Module):
 
         input_tokens: [B, T, D]
         """
-        mu = jnp.mean(input_tokens, axis=-1)
-        sigma = jnp.std(input_tokens, axis=-1)
-        return (self.gain_param / sigma) * (input_tokens - mu) + self.bias_param
+        # Normalize across hidden dimension activations.
+        mu = jnp.mean(input_tokens, axis=-1, keepdims=True)  # Outputs [B, T, 1]
+        sigma = jnp.std(input_tokens, axis=-1, keepdims=True)
+        return (self.gain_param *
+                (input_tokens - mu)) / (sigma + self.eps) + self.bias_param
 
 
 class MultiHeadAttention(nnx.Module):
@@ -114,15 +154,24 @@ class MultiHeadAttention(nnx.Module):
             qk_dim = hidden_dim
         if value_dim < 0:
             value_dim = hidden_dim
-        self.attention_heads = [
-            Attention(hidden_dim,
-                      rngs=rngs,
-                      qk_dim=qk_dim,
-                      value_dim=value_dim) for _ in range(num_heads)
-        ]
-        self.W_o = nnx.Linear(num_heads * value_dim, hidden_dim)
 
-    def __call__(self, query: jax.Array, key: jax.Array, value: jax.Array,
+        def make_head(rngs: nnx.Rngs):
+            return Attention(hidden_dim=hidden_dim,
+                             rngs=rngs,
+                             qk_dim=qk_dim,
+                             value_dim=value_dim)
+
+        self.attention_heads = nnx.vmap(make_head, in_axes=0,
+                                        out_axes=0)(rngs.split(num_heads))
+        self.W_o = nnx.Linear(hidden_dim * num_heads, hidden_dim, rngs=rngs)
+        self.value_dim = value_dim
+        self.hidden_dim = hidden_dim
+        self.num_heads = num_heads
+
+    def __call__(self,
+                 query: jax.Array,
+                 key: jax.Array,
+                 value: jax.Array,
                  attn_mask: jax.Array | None = None):
         """Forward pass for calculating self attention.
 
@@ -137,14 +186,18 @@ class MultiHeadAttention(nnx.Module):
         Returns:
             Attention scores, 
         """
-        outputs = []
-        attn_scores = []
-        for attn in self.attention_heads:
-            output = attn(query, key, value, attn_mask)
-            outputs.append(output['output'])
-            attn_scores.append(output['attn_scores'])
-        outputs = jnp.stack(outputs)
-        attn_scores = jnp.stack(attn_scores)
-        chex.assert_shape(outputs, ())
+        b, seq_len, _ = query.shape
 
+        def run_head(attn, q, k, v, mask):
+            return attn(q, k, v, mask)
 
+        outputs = nnx.vmap(run_head,
+                           in_axes=(0, None, None, None, None),
+                           out_axes=0)(self.attention_heads, query, key, value,
+                                       attn_mask)
+        h = jnp.transpose(outputs.activations, axes=[1, 2, 3, 0])
+        h = jnp.reshape(h, shape=(b, seq_len, -1))
+        chex.assert_shape(h, (b, seq_len, self.hidden_dim * self.num_heads))
+        h = self.W_o(h)
+        chex.assert_shape(h, (b, seq_len, self.hidden_dim))
+        return AttentionOutput(activations=h, attn_scores=outputs.attn_scores)

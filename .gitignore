@@ -1,3 +1,5 @@
 jax_env/
 /data/TinyStories
 __pycache__/
+jax_env_13/
+training_runs/
