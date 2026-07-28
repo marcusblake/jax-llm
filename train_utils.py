@@ -8,6 +8,7 @@ import dataclasses
 import jax.numpy as jnp
 import uuid
 import os
+import data
 
 from tensorboard.summary import Writer as SummaryWriter
 
@@ -18,8 +19,7 @@ CHECKPOINTS_DIRECTORY_FMT = 'checkpoints/id_{0}/'
 @dataclasses.dataclass(frozen=True)
 class TrainingConfig:
     model: nnx.Module
-    train_data_loader: grain.DataLoader
-    eval_data_loader: grain.DataLoader
+    data_config: data.DataConfig
     optimizer: nnx.Optimizer
     batch_size: int = 100
     training_steps: int = 100

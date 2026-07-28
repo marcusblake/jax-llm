@@ -63,17 +63,25 @@ class MaskedSelfAttentionBlock(nnx.Module):
 
 class MiniGPT(nnx.Module):
 
-    def __init__(self, vocab_size: int, max_seq_length: int, hidden_dim: int,
-                 attention_heads: int, num_attention_layers: int):
+    def __init__(self,
+                 vocab_size: int,
+                 max_seq_length: int,
+                 hidden_dim: int,
+                 attention_heads: int,
+                 num_attention_layers: int,
+                 *,
+                 rngs: nnx.Rngs = nnx.Rngs(0)):
         self.vocab_size = vocab_size
         self.word_embeddings = tb.WordEmbeddings(vocab_size, hidden_dim)
         self.positional_embeddings = tb.SinusoidalPositionalEmbeddings(
             max_seq_length, hidden_dim)
-        self.attention_blocks = [
-            MaskedSelfAttentionBlock(attention_heads, hidden_dim)
+        self.attention_blocks = nnx.List([
+            MaskedSelfAttentionBlock(attention_heads, hidden_dim, rngs=rngs)
             for _ in range(num_attention_layers)
-        ]
-        self.next_token_prediction = nnx.Linear(hidden_dim, vocab_size)
+        ])
+        self.next_token_prediction = nnx.Linear(hidden_dim,
+                                                vocab_size,
+                                                rngs=rngs)
 
     def __call__(self, input_sequence: jax.Array) -> jax.Array:
         batch_size = input_sequence.shape[0]
@@ -90,12 +98,17 @@ class MiniGPT(nnx.Module):
 
 
 def mini_gpt_training_config() -> TrainingConfig:
+    data_config = data.get_tiny_stories_config(num_epochs=100, batch_size=64)
+    gpt_model = MiniGPT(data_config.vocab_size,
+                        data_config.max_seq_length,
+                        hidden_dim=256,
+                        attention_heads=4,
+                        num_attention_layers=2)
+    print('model', gpt_model)
     return TrainingConfig(
-        model=MiniGPT(),
-        train_data_loader=data.get_tiny_stories_data_loader('train',
-                                                            num_epochs=10,
-                                                            batch_size=64),
-        eval_data_loader=data.get_tiny_stories_data_loader('test',
-                                                           num_epochs=10,
-                                                           batch_size=32),
+        model=gpt_model,
+        data_config=data_config,
+        optimizer=nnx.Optimizer(gpt_model,
+                                optax.adam(learning_rate=1e-3),
+                                wrt=nnx.Param),
         loss_fn=optax.softmax_cross_entropy_with_integer_labels)

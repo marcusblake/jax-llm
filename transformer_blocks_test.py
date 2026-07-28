@@ -5,6 +5,15 @@ import jax.numpy as jnp
 import jax
 
 
+class WordEmbeddingsTest(unittest.TestCase):
+    def test_word_embedding_simple(self):
+        batch_size, seq_length, vocab_size, hidden_dim = 10, 100, 100, 50
+        word_embeds = tb.WordEmbeddings(vocab_size, hidden_dim)
+
+        input_sequence = jax.random.randint(jax.random.PRNGKey(1), shape=(batch_size, seq_length), minval=0, maxval=vocab_size-1)
+        output = word_embeds(input_sequence)
+        np.testing.assert_array_equal(output.shape, (batch_size, seq_length, hidden_dim))
+
 class SinusoidalPositionalEmbeddingsTest(unittest.TestCase):
 
     def test_positional_embedding_dimension(self):

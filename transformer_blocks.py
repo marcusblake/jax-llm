@@ -20,8 +20,14 @@ class PositionalEmbeddings(nnx.Module):
     """
     """
 
-    def __init__(self, max_seq_length: int, hidden_dim: int):
-        self.positional_embeds = nnx.Embed(max_seq_length, hidden_dim)
+    def __init__(self,
+                 max_seq_length: int,
+                 hidden_dim: int,
+                 *,
+                 rngs: nnx.Rngs = nnx.Rngs(0)):
+        self.positional_embeds = nnx.Embed(max_seq_length,
+                                           hidden_dim,
+                                           rngs=rngs)
 
     def __call__(self, x: jax.Array, seq_length: int) -> jax.Array:
         seq_length = x.shape[0]
@@ -54,10 +60,22 @@ class SinusoidalPositionalEmbeddings(nnx.Module):
 
 class WordEmbeddings(nnx.Module):
 
-    def __init__(self, vocab_size: int, hidden_dim: int):
-        self.word_embeds = nnx.Embed(vocab_size, hidden_dim)
+    def __init__(self,
+                 vocab_size: int,
+                 hidden_dim: int,
+                 *,
+                 rngs: nnx.Rngs = nnx.Rngs(0)):
+        self.word_embeds = nnx.Embed(vocab_size, hidden_dim, rngs=rngs)
 
     def __call__(self, token_ids: jax.Array):
+        """Array of token_ids.
+
+        Args:
+            token_ids: Token ids of size [B, T]
+
+        Returns:
+            Learned word embeddings of size [B, T, D]
+        """
         return self.word_embeds(token_ids)
 
 
