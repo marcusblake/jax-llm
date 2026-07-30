@@ -88,9 +88,8 @@ class MiniGPT(nnx.Module):
         seq_length = input_sequence.shape[1]
         seq = self.word_embeddings(input_sequence)
         seq = self.positional_embeddings(seq)
-        for attn_block in self.attention_blocks:
+        for i, attn_block in enumerate(self.attention_blocks):
             seq = attn_block(seq)
-
         vocab_logits = self.next_token_prediction(seq)
         chex.assert_shape(vocab_logits,
                           (batch_size, seq_length, self.vocab_size))
@@ -98,12 +97,12 @@ class MiniGPT(nnx.Module):
 
 
 def mini_gpt_training_config() -> TrainingConfig:
-    data_config = data.get_tiny_stories_config(num_epochs=100, batch_size=64)
+    data_config = data.get_tiny_stories_config(num_epochs=100, batch_size=12, seed=3)
     gpt_model = MiniGPT(data_config.vocab_size,
                         data_config.max_seq_length,
-                        hidden_dim=256,
-                        attention_heads=4,
-                        num_attention_layers=2)
+                        hidden_dim=32,
+                        attention_heads=1,
+                        num_attention_layers=1)
     print('model', gpt_model)
     return TrainingConfig(
         model=gpt_model,
@@ -111,4 +110,5 @@ def mini_gpt_training_config() -> TrainingConfig:
         optimizer=nnx.Optimizer(gpt_model,
                                 optax.adam(learning_rate=1e-3),
                                 wrt=nnx.Param),
-        loss_fn=optax.softmax_cross_entropy_with_integer_labels)
+        loss_fn=optax.softmax_cross_entropy_with_integer_labels,
+        batch_size=12)

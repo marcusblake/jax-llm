@@ -3,7 +3,7 @@ import numpy as np
 import os
 import grain
 import jax
-from typing import Tuple
+from typing import Tuple, Dict, NamedTuple
 import dataclasses
 
 _TINY_STORIES_SPECIAL_CHARACTER = '<|endoftext|>'
@@ -37,10 +37,17 @@ class TruncateOrPad(grain.transforms.Map):
         return output_sequence[:_MAX_SEQUENCE_LENGTH]
 
 
-class ShiftAndCreateLabel(grain.transforms.Map):
+class Example(NamedTuple):
+    data: np.array
+    labels: np.array
 
-    def map(self, input_sequence: np.array) -> np.array:
-        return {""}
+
+class CreateExample(grain.transforms.Map):
+
+    def map(self, input_sequence: np.array) -> Example:
+        return Example(data=input_sequence,
+                       labels=np.concatenate([input_sequence[1:],
+                                              np.zeros(1, dtype=np.uint32)], dtype=np.uint32))
 
 
 def _read_tinystories_from_file(data_split):
@@ -83,11 +90,15 @@ def _get_tiny_stories_data_loader(data_split: str,
                                           shuffle=True,
                                           num_epochs=num_epochs,
                                           seed=seed)
-    return grain.DataLoader(
-        data_source=data_source,
-        sampler=sampler,
-        operations=[grain.Batch(), Tokenize(),
-                    TruncateOrPad()])
+    return grain.DataLoader(data_source=data_source,
+                            sampler=sampler,
+                            operations=[
+                                Tokenize(),
+                                TruncateOrPad(),
+                                CreateExample(),
+                                grain.transforms.Batch(batch_size=batch_size,
+                                                       drop_remainder=True),
+                            ])
 
 
 def get_tiny_stories_config(num_epochs: int, batch_size: int,
@@ -95,8 +106,10 @@ def get_tiny_stories_config(num_epochs: int, batch_size: int,
     return DataConfig(
         train_data_loader=_get_tiny_stories_data_loader('train',
                                                         num_epochs=num_epochs,
-                                                        batch_size=batch_size),
-        test_data_loader=_get_tiny_stories_data_loader('test',
+                                                        batch_size=batch_size,
+                                                        seed=seed),
+        eval_data_loader=_get_tiny_stories_data_loader('test',
                                                        num_epochs=num_epochs,
-                                                       batch_size=batch_size),
+                                                       batch_size=batch_size,
+                                                       seed=seed),
         vocab_size=TinyStoriesDataSource.vocab_size())

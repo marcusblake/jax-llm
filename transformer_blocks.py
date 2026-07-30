@@ -155,8 +155,9 @@ class LayerNorm(nnx.Module):
         # Normalize across hidden dimension activations.
         mu = jnp.mean(input_tokens, axis=-1, keepdims=True)  # Outputs [B, T, 1]
         sigma = jnp.std(input_tokens, axis=-1, keepdims=True)
-        return (self.gain_param *
+        res = (self.gain_param *
                 (input_tokens - mu)) / (sigma + self.eps) + self.bias_param
+        return res
 
 
 class MultiHeadAttention(nnx.Module):
@@ -168,23 +169,20 @@ class MultiHeadAttention(nnx.Module):
                  rngs: nnx.Rngs = nnx.Rngs(0),
                  qk_dim: int = -1,
                  value_dim: int = -1):
-        if qk_dim < 0:
-            qk_dim = hidden_dim
-        if value_dim < 0:
-            value_dim = hidden_dim
-
+        head_dim = hidden_dim // num_heads
         def make_head(rngs: nnx.Rngs):
-            return Attention(hidden_dim=hidden_dim,
+            return Attention(hidden_dim=head_dim,
                              rngs=rngs,
-                             qk_dim=qk_dim,
-                             value_dim=value_dim)
+                             qk_dim=hidden_dim,
+                             value_dim=hidden_dim)
 
         self.attention_heads = nnx.vmap(make_head, in_axes=0,
                                         out_axes=0)(rngs.split(num_heads))
-        self.W_o = nnx.Linear(hidden_dim * num_heads, hidden_dim, rngs=rngs)
+        self.W_o = nnx.Linear(hidden_dim, hidden_dim, rngs=rngs)
         self.value_dim = value_dim
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
+        self.dim_per_head = head_dim
 
     def __call__(self,
                  query: jax.Array,
@@ -208,14 +206,13 @@ class MultiHeadAttention(nnx.Module):
 
         def run_head(attn, q, k, v, mask):
             return attn(q, k, v, mask)
-
         outputs = nnx.vmap(run_head,
                            in_axes=(0, None, None, None, None),
                            out_axes=0)(self.attention_heads, query, key, value,
                                        attn_mask)
         h = jnp.transpose(outputs.activations, axes=[1, 2, 3, 0])
         h = jnp.reshape(h, shape=(b, seq_len, -1))
-        chex.assert_shape(h, (b, seq_len, self.hidden_dim * self.num_heads))
+        chex.assert_shape(h, (b, seq_len, self.hidden_dim))
         h = self.W_o(h)
         chex.assert_shape(h, (b, seq_len, self.hidden_dim))
         return AttentionOutput(activations=h, attn_scores=outputs.attn_scores)

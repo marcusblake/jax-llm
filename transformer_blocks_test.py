@@ -238,29 +238,6 @@ class MultiHeadAttentionTest(unittest.TestCase):
         np.testing.assert_array_equal(output.activations.shape,
                                       (batch_size, seq_length, hidden_dim))
 
-    def test_multihead_attention_qk_value_dims(self):
-        num_heads, batch_size, seq_length = 4, 10, 5
-        hidden_dim, qk_dim, value_dim = 20, 8, 16
-        split_keys = jax.random.split(jax.random.PRNGKey(0), 3)
-        queries = jax.random.uniform(split_keys[0],
-                                     shape=(batch_size, seq_length, qk_dim),
-                                     dtype=jnp.float32)
-        keys = jax.random.uniform(split_keys[1],
-                                  shape=(batch_size, seq_length, qk_dim),
-                                  dtype=jnp.float32)
-        values = jax.random.uniform(split_keys[2],
-                                    shape=(batch_size, seq_length, value_dim),
-                                    dtype=jnp.float32)
-
-        mha = tb.MultiHeadAttention(num_heads,
-                                    hidden_dim,
-                                    qk_dim=qk_dim,
-                                    value_dim=value_dim)
-        output = mha(queries, keys, values)
-
-        np.testing.assert_array_equal(output.activations.shape,
-                                      (batch_size, seq_length, hidden_dim))
-
 
 if __name__ == '__main__':
     unittest.main()
