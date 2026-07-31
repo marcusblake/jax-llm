@@ -10,6 +10,7 @@ import uuid
 import os
 import data
 import jax.profiler
+from orbax.checkpoint import v1 as ocp
 
 from tensorboard.summary import Writer as SummaryWriter
 
@@ -27,8 +28,7 @@ class TrainingConfig:
     eval_frequency: int = 10
     run_id: str = dataclasses.field(
         default_factory=lambda: str(uuid.uuid4())[:8])
-    checkpoint_frequency: int = 10
-    checkpoint_path: str = ''
+    checkpoint_frequency: int = 5
     loss_fn: Callable[[jax.Array, jax.Array],
                       jax.Array] = optax.softmax_cross_entropy
 
@@ -80,6 +80,7 @@ def make_eval_step(
 
 def basic_train_loop(config: TrainingConfig):
     file_path = TENSORBOARD_DIRECTORY_FMT.format(config.run_id)
+    checkpoint_path = os.path.abspath(CHECKPOINTS_DIRECTORY_FMT.format(config.run_id))
     print(
         f"Writing tensorboard output to {file_path}. "
         f"You can launch tensorboard using 'tensorboard --logdir {file_path}'.")
@@ -92,23 +93,26 @@ def basic_train_loop(config: TrainingConfig):
     try:
         training_data_iterator = iter(config.data_config.train_data_loader)
         eval_data_iterator = iter(config.data_config.eval_data_loader)
-        for step in range(1, config.training_steps + 1):
-            example = next(training_data_iterator)
-            print(example)
-            loss = train_step(config.model, config.optimizer, example.data,
-                            example.labels)
-            train_writer.add_scalar('Training Loss', loss.item(), step)
-            print(f'Step {step}: Training loss - {loss.item():.4f}')
+        with ocp.training.Checkpointer(checkpoint_path) as checkpointer:
+            for step in range(1, config.training_steps + 1):
+                example = next(training_data_iterator)
+                loss = train_step(config.model, config.optimizer, example.data,
+                                example.labels)
+                train_writer.add_scalar('Training Loss', loss.item(), step)
+                print(f'Step {step}: Training loss - {loss.item():.4f}')
 
-            if step % 10 == 0:
-                train_writer.flush()
-                eval_writer.flush()
+                if step % 10 == 0:
+                    train_writer.flush()
+                    eval_writer.flush()
 
-            if step % config.eval_frequency == 0:
-                example = next(eval_data_iterator)
-                loss = eval_step(config.model, example.data, example.labels)
-                eval_writer.add_scalar('Eval loss', loss.item(), step)
-                print(f'Step {step}: Eval loss - {loss.item():.4f}')
+                if step % config.eval_frequency == 0:
+                    example = next(eval_data_iterator)
+                    loss = eval_step(config.model, example.data, example.labels)
+                    eval_writer.add_scalar('Eval loss', loss.item(), step)
+                    print(f'Step {step}: Eval loss - {loss.item():.4f}')
+
+                if step % config.checkpoint_frequency == 0:
+                    checkpointer.save(step, config.model)
 
     finally:
         train_writer.close()

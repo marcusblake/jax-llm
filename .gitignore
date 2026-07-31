@@ -3,3 +3,4 @@ jax_env/
 __pycache__/
 jax_env_13/
 training_runs/
+checkpoints/
